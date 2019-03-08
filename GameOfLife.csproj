@@ -1,0 +1,122 @@
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">  
+  <PropertyGroup>
+    <P_NumberRange>$(MSBuildProjectDirectory)\NumberRange.csproj</P_NumberRange>
+    <Empty></Empty>
+
+    <SourceFile>$(MSBuildProjectDirectory)\Board_0.txt</SourceFile>
+    <TargetFile>$(MSBuildProjectDirectory)\Board_1.txt</TargetFile>
+
+    <DeadCell>.</DeadCell>
+    <LiveCell>#</LiveCell>
+  </PropertyGroup>
+  
+  <Target Name="Build">
+    <Message Text="Advancing state for board: $(SourceFile) -> $(TargetFile)"/>
+    <PropertyGroup>
+      <!-- Convert from whatever the file represents as live and dead cells into 0's and 1's -->
+      <!-- We do this so that we can make use of msbuild property substitution to treat them as numbers later-->
+      <BaseWorld>$([System.IO.File]::ReadAllText($(SourceFile))
+      .Replace('%0d',"").Trim()
+      .Replace($(DeadCell),"0").Replace($(LiveCell),"1"))</BaseWorld>
+      <NumCols>$(BaseWorld.IndexOf('%0a'))</NumCols>
+      <NumRows>$(BaseWorld.Split('%0a').Length)</NumRows>
+      
+      <!-- Pad The world by 1 unit on each side with empty spaces so we can't go over the edges -->
+      <BlankRow>$(Empty.PadLeft($(NumCols),'0'))</BlankRow>
+      <World>$(BlankRow
+      .Insert(0,"%0a0").Insert(0,$(BaseWorld))
+      .Insert(0,"0%0a").Insert(0,$(BlankRow))
+      .Replace("%0a","0%0a0")
+      )</World>
+    </PropertyGroup>
+
+    <!-- Build range for num rows & columns -->
+    <MakeDir Directories="temp"/>  
+    <MSBuild Projects="$(P_NumberRange)" Properties="Last=$(NumRows);File=temp/Range_Rows.txt" />
+    <ReadLinesFromFile File="temp/Range_Rows.txt">
+      <Output TaskParameter="Lines" ItemName="Range_Rows"/>
+    </ReadLinesFromFile>
+
+    <MSBuild Projects="$(P_NumberRange)" Properties="Last=$(NumCols);File=temp/Range_Columns.txt" />
+    <ReadLinesFromFile File="temp/Range_Columns.txt">
+      <Output TaskParameter="Lines" ItemName="Range_Columns"/>
+    </ReadLinesFromFile>
+    
+    <!-- Build Cross product of indexes into rows & columns -->
+    <CreateItem Include="@(Range_Columns)" AdditionalMetadata="Row=%(Range_Rows.Identity)">
+      <Output TaskParameter="Include" ItemName="Range_Coords"/>
+    </CreateItem>
+
+    <!-- Calculate indexes into the world with padding (WX/WY) -->
+    <CreateItem Include="-" AdditionalMetadata="
+      WX0=%(Range_Coords.Identity);
+      WX1=$([MSBuild]::Add(%(Range_Coords.Identity), 1));
+      WX2=$([MSBuild]::Add(%(Range_Coords.Identity), 2));
+      WY0=%(Range_Coords.Row); 
+      WY1=$([MSBuild]::Add(%(Range_Coords.Row), 1));
+      WY2=$([MSBuild]::Add(%(Range_Coords.Row), 2));"> 
+      <Output TaskParameter="Include" ItemName="Coord"/>
+    </CreateItem>
+
+    <!-- Sample cells the world -->
+    <CreateItem Include="-" AdditionalMetadata="
+      X=%(Coord.WX0); Y=%(Coord.WY0);
+      Self=$(World.Split('%0a')[%(Coord.WY1)][%(Coord.WX1)]);
+      R0=$(World.Split('%0a')[%(Coord.WY0)].Substring(%(Coord.WX0),3));
+      R1=$(World.Split('%0a')[%(Coord.WY1)].Substring(%(Coord.WX0),3));
+      R2=$(World.Split('%0a')[%(Coord.WY2)].Substring(%(Coord.WX0),3));"> 
+      <Output TaskParameter="Include" ItemName="Rows"/>
+    </CreateItem>
+
+    <!-- Calculate counts of surrounding cells that are alive-->
+    <!-- Note: Any binary number interpereted as a decimal number, mod 9, will give the popcount of that binary number 
+         * This is because 10, 100, 1000 etc always mod to 1 (9, 99, 999) and you can split the binary number up into additions of 10s, 100s, 1000s etc -->
+    <CreateItem Include="-" AdditionalMetadata="
+      X=%(Rows.X); Y=%(Rows.Y);
+
+      Self=%(Rows.Self);
+      Neighbour=$([MSBuild]::Add( $([MSBuild]::Modulo(%(Rows.R0),9)), 
+                $([MSBuild]::Add( $([MSBuild]::Modulo(%(Rows.R1),9)), 
+                                  $([MSBuild]::Modulo(%(Rows.R2),9)) )) ));">
+      <Output TaskParameter="Include" ItemName="PrevAlive"/>
+    </CreateItem>
+
+    <!-- Decide if new cell should be alive (A cell is dead here if it has a non-zero value in dead)
+          Cell is alive if: 
+          Cell was already alive has 2 or 3 living neighbours
+          OR Cell has eactly 3 living neighbours
+      This is equivalent to saying a cell is dead if:
+            (neighbours != 3) AND !(neighbours == 4 || self == 1) 
+      Which has been translated into the below arithmatic -->
+    <CreateItem Include="-" AdditionalMetadata="
+      X=%(PrevAlive.X); Y=%(PrevAlive.Y);
+
+      Dead=$([MSBuild]::Multiply(
+             $([MSBuild]::Subtract(%(PrevAlive.Neighbour),3)),
+             $([MSBuild]::BitwiseOr(
+               $([MSBuild]::Subtract(%(PrevAlive.Self),1)),
+               $([MSBuild]::Subtract(%(PrevAlive.Neighbour),4))
+              ))
+           ));">
+      <Output TaskParameter="Include" ItemName="NextAlive"/>
+    </CreateItem>
+
+    <!-- Convert cells into text using lookup table. Only index 0 is live cell. -->
+    <PropertyGroup><CellLookup>$(LiveCell.PadRight(8,$(DeadCell)))</CellLookup></PropertyGroup>
+    <CreateItem Include="$(CellLookup.Substring($([MSBuild]::BitwiseAnd(%(NextAlive.Dead),7)),1))" AdditionalMetadata="X=%(NextAlive.X); Y=%(NextAlive.Y);">
+      <Output TaskParameter="Include" ItemName="NextCells"/>
+    </CreateItem>
+
+    <!-- Write board out -->
+    <CreateItem Include="OutRow%(NextCells.Y)">
+      <Output TaskParameter="Include" ItemName="OutProperties"/>
+    </CreateItem>
+    <CreateProperty Value="@(NextCells)">
+      <Output TaskParameter="Value" PropertyName="OutRow%(NextCells.Y)" />  
+    </CreateProperty>
+
+    <WriteLinesToFile File="$(TargetFile)" Overwrite="true" />
+    <WriteLinesToFile File="$(TargetFile)" Lines="$(%(OutProperties.Identity).Replace(';',$(Empty)))" Overwrite="false" />
+ </Target>
+
+</Project> 

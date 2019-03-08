@@ -1,0 +1,27 @@
+<!--
+ Properties:
+    First: First value (inclusive) to have in range (Default: 0)
+    Last: Last value (exclusive) in range
+    File: Text file to store range of numbers in, one per line
+    Overwrite: Overwrite or append to $(File) (Default: True)
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">  
+  <PropertyGroup>
+    <First>0</First>
+    <Overwrite>True</Overwrite>
+    
+    <Next>$([MSBuild]::Add($(First), 1))</Next>
+  </PropertyGroup>
+  
+  <Target Name="Build">
+    <WriteLinesToFile 
+        File="$(File)" 
+        Lines="$(First)" 
+        Overwrite="$(Overwrite)" 
+        Condition="$(First) &lt; $(Last)"/>
+    <MSBuild 
+        Projects="$(MSBuildProjectFile)" 
+        Properties="First=$(Next);Last=$(Last);File=$(File);Overwrite=False" 
+        Condition="$(Next) &lt; $(Last)"/>
+  </Target>
+</Project>
